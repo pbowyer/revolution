@@ -783,6 +783,69 @@ class modParserTest extends MODxTestCase {
         ];
     }
 
+
+    /**
+     * @dataProvider providerProcessElementTags2
+     */
+    public function testProcessElementTags2($expected, $content, $params)
+    {
+        $c = $content;
+        $processed = $this->modx->parser->processElementTags(
+            $params['parentTag'],
+            $content,
+            $params['processUncacheable'],
+            $params['removeUnprocessed'],
+            $params['prefix'],
+            $params['suffix'],
+            $params['tokens'],
+            $params['depth']
+        );
+        $actual = [
+            'processed' => $processed,
+            'content' => $content
+        ];
+        $this->assertEquals($expected, $actual, "Did not get expected results from parsing {$c}.");
+    }
+    /**
+     * dataProvider for testProcessElementTags2.
+     */
+    public function providerProcessElementTags2() {
+        return [
+            [
+                [
+                    'processed' => 1,
+                    'content' => ""
+                ],
+                "[[~]]",
+                [
+                    'parentTag' => '',
+                    'processUncacheable' => false,
+                    'removeUnprocessed' => false,
+                    'prefix' => '[[',
+                    'suffix' => ']]',
+                    'tokens' => [],
+                    'depth' => 0
+                ]
+            ],
+            [
+                [
+                    'processed' => 1,
+                    'content' => ""
+                ],
+                "[[mySnippet? &link=`[[~]]`]]",
+                [
+                    'parentTag' => '',
+                    'processUncacheable' => false,
+                    'removeUnprocessed' => false,
+                    'prefix' => '[[',
+                    'suffix' => ']]',
+                    'tokens' => [],
+                    'depth' => 0
+                ]
+            ],
+        ];
+    }
+
     /**
      * Test modParser->parsePropertyString()
      *

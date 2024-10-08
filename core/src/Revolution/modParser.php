@@ -218,6 +218,9 @@ class modParser
                     $processed++;
                     continue;
                 }
+                if ($tag[1] === '~') {
+                    $this->modx->log(xPDO::LOG_LEVEL_ERROR, "Empty link tag in $parentTag. '$content'");
+                }
                 $tagOutput= $this->processTag($tag, $processUncacheable);
                 if (($tagOutput === null || $tagOutput === false) && $removeUnprocessed) {
                     $tagMap[$tag[0]]= '';

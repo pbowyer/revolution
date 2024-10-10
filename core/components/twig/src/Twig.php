@@ -52,16 +52,17 @@ class Twig extends Parser
         $depth = 0
     ) {
         //xdebug_break();
-        if (is_string($content) && !$processUncacheable) {
+        if (is_string($content) && $processUncacheable
+            && $this->modx->context->key !== 'mgr') {
             $this->init();
             $_processingUncacheable = $this->_processingUncacheable;
             $this->_processingUncacheable = true;
-            $content = $this->renderString($content,
-                array_merge(array_filter(
-                    $this->modx->placeholders,
-                    fn($v, $k) => !str_starts_with($k, '+'),
-                    ARRAY_FILTER_USE_BOTH
-                ), ['modx' => $this->modx])
+            $content = $this->renderString($content, []
+//                array_merge(array_filter(
+//                    $this->modx->placeholders,
+//                    fn($v, $k) => !str_starts_with($k, '+'),
+//                    ARRAY_FILTER_USE_BOTH
+//                ), ['modx' => $this->modx])
             ); //
             $this->_processingUncacheable = $_processingUncacheable;
         }
@@ -105,6 +106,8 @@ class Twig extends Parser
         ]);
         $this->twig->addExtension(new DebugExtension());
         // TODO add event so ppl can register other extensions
+
+        $this->twig->addGlobal('_modx', $this->modx);
     }
 
     public function renderString(string $content, array $placeholders)

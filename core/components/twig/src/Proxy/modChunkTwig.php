@@ -5,14 +5,16 @@ namespace Boffinate\Twig\Proxy;
 
 use Boffinate\Twig\Twig;
 use MODX\Revolution\modChunk;
+use MODX\Revolution\modElement;
 use ReflectionClass;
 
-class modChunkTwig // Oh fuck there's instanceof checks so this needs to have modChunk as its parent
+class modChunkTwig extends modChunk
 {
     public mixed $processProperties = null;
 
     public function __construct(private modChunk $wrappedClass, private Twig $twig)
     {
+        parent::__construct($twig->modx);
     }
 
     /**
@@ -24,8 +26,14 @@ class modChunkTwig // Oh fuck there's instanceof checks so this needs to have mo
      */
     public function process($properties = null, $content = null)
     {
-        if (is_string($content)) {
-            $content = $this->twig->renderString($content, (array)$properties);
+        // We have to process Twig before Fenom which is why this comes first and duplicates some setup
+        $reflectionMethod = new \ReflectionMethod(get_parent_class(get_parent_class($this->wrappedClass)),
+            'process');
+        echo $reflectionMethod->invoke($this->wrappedClass);
+        if (is_string($this->wrappedClass->getContent())) {
+            $parsedProperties = $this->wrappedClass->getProperties($properties);
+            $twigRenderedContent = $this->twig->renderString($this->wrappedClass->getContent(), (array)$parsedProperties);
+            $this->wrappedClass->_content = $twigRenderedContent;
         }
         //$this->processProperties = $properties;
         $response = $this->wrappedClass->process($properties, $content);
@@ -38,7 +46,7 @@ class modChunkTwig // Oh fuck there's instanceof checks so this needs to have mo
         return $this->wrappedClass->$name(...$arguments);
     }
 
-    public function __get(string $name)
+    public function __get($name)
     {
         if ($this->isConstant($name)) {
             return constant(get_class($this->wrappedClass) . '::' . $name);
@@ -46,12 +54,12 @@ class modChunkTwig // Oh fuck there's instanceof checks so this needs to have mo
         return $this->wrappedClass->$name;
     }
 
-    public function __set(string $name, mixed $value): void
+    public function __set($name, mixed $value): void
     {
         $this->wrappedClass->$name = $value;
     }
 
-    public function __isset(string $name): bool
+    public function __isset($name): bool
     {
         return isset($this->wrappedClass->$name);
     }

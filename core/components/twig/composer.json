@@ -1,0 +1,31 @@
+{
+    "name": "boffinate/modx-twig",
+    "description": "Library for using Twig in MODX Revolution 3.x.",
+    "keywords": [
+        "MODX",
+        "xPDO",
+        "PDO",
+        "Twig"
+    ],
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Boffinate Ltd",
+            "email": "opensource@boffinate.com"
+        }
+    ],
+    "type": "library",
+    "minimum-stability": "stable",
+    "autoload": {
+        "psr-4": {
+            "Boffinate\\Twig\\": "src/"
+        }
+    },
+    "require": {
+        "php": ">=8.1",
+        "twig/twig": "^3.14"
+    },
+    "require-dev": {
+        "symfony/var-dumper": "^7.1"
+    }
+}

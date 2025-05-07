@@ -11,7 +11,7 @@ $modx->services[Boffinate\Twig\Twig::class] = $modx->services->factory(function 
     return new $class($modx, $config);
 });
 // Add services
-$modx->services->add('parser', function ($c) use ($modx) {
+$modx->services->add('twigparser', function ($c) use ($modx) {
     $class = $modx->getOption('modxTwig.class', null, \Boffinate\Twig\Twig::class, true);
     return new $class($modx, $c->get('pdotools'));
 });

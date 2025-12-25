@@ -10,6 +10,7 @@ use ModxPro\PdoTools\CoreTools;
 use ModxPro\PdoTools\Parsing\Parser;
 use Twig\Environment;
 use Twig\Extension\DebugExtension;
+use xPDO\xPDO;
 
 class Twig extends Parser
 {
@@ -99,15 +100,18 @@ class Twig extends Parser
     {
         if (isset($this->twig)) return;
 
+        $cachePath = $this->getCachePath();
         $loader = new \Twig\Loader\ArrayLoader([
         ]);
         $this->twig = new \Twig\Environment($loader, [
             'debug' => true,
+            'cache' => $cachePath,
+            'auto_reload' => true,
         ]);
         $this->twig->addExtension(new DebugExtension());
         // TODO add event so ppl can register other extensions
 
-        $this->twig->addGlobal('_modx', $this->modx);
+        //$this->twig->addGlobal('_modx', $this->modx);
     }
 
     public function renderString(string $content, array $placeholders)
@@ -117,5 +121,18 @@ class Twig extends Parser
             $this->twig->createTemplate($content),
             $placeholders
         );
+    }
+
+    private function getCachePath(): string
+    {
+        $cacheBase = $this->modx->getOption(xPDO::OPT_CACHE_PATH, null, MODX_CORE_PATH . 'cache/');
+        $cachePath = rtrim($cacheBase, '/\\') . '/twig/';
+
+        if (!is_dir($cachePath)) {
+            $this->modx->getCacheManager();
+            $this->modx->cacheManager->writeTree($cachePath);
+        }
+
+        return $cachePath;
     }
 }

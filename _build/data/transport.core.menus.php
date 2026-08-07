@@ -141,6 +141,14 @@ $menusConfig = [
                         'action' => 'system/definitions',
                     ],
                     // endregion
+                    // region: Composer Packages
+                    [
+                        'text' => 'composer_packages',
+                        'description' => 'composer_packages_desc',
+                        'permissions' => 'packages',
+                        'action' => 'workspaces/composer',
+                    ],
+                    // endregion
                 ],
             ],
             // endregion

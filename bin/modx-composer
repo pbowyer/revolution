@@ -1,0 +1,63 @@
+#!/usr/bin/env php
+<?php
+
+/*
+ * Detached worker for async composer jobs submitted through the Manager.
+ *
+ * Usage: modx-composer job-run <job-id>
+ *
+ * The JobRecord is the report: JobManager::execute() persists every outcome
+ * (including composer failures and cancellation) into the record, so this
+ * script exits 0 whenever execute() returns. A non-zero exit means the
+ * infrastructure itself broke before or during execution; the message goes to
+ * stderr, which the spawner appends to the job's log file.
+ */
+
+use MODX\Revolution\Composer\ComposerService;
+use MODX\Revolution\modX;
+
+define('MODX_API_MODE', true);
+
+try {
+    $root = dirname(__DIR__);
+    if (is_file($root . '/config.core.php')) {
+        require $root . '/config.core.php';
+    }
+    if (!defined('MODX_CORE_PATH')) {
+        define('MODX_CORE_PATH', $root . '/core/');
+    }
+    if (!defined('MODX_CONFIG_KEY')) {
+        define('MODX_CONFIG_KEY', 'config');
+    }
+    require MODX_CORE_PATH . 'vendor/autoload.php';
+
+    $command = $argv[1] ?? '';
+    $jobId = $argv[2] ?? '';
+    if ($command !== 'job-run' || $jobId === '') {
+        fwrite(STDERR, "Usage: modx-composer job-run <job-id>\n");
+        exit(1);
+    }
+
+    $modx = modX::getInstance();
+    if (!$modx instanceof modX) {
+        fwrite(STDERR, "Could not bootstrap MODX.\n");
+        exit(1);
+    }
+    if (!$modx->connect()) {
+        fwrite(STDERR, "Could not connect to the MODX database.\n");
+        exit(1);
+    }
+
+    // Load the system settings (composer.php_binary, composer.binary) into
+    // $modx->config without a full initialize(): the worker needs no request
+    // context, namespaces, extension packages, or OnMODXInit plugins.
+    $modx->getCacheManager();
+    $modx->getConfig();
+
+    $service = new ComposerService($modx);
+    $service->jobManager()->execute($jobId);
+    exit(0);
+} catch (\Throwable $exception) {
+    fwrite(STDERR, $exception->getMessage() . "\n");
+    exit(1);
+}

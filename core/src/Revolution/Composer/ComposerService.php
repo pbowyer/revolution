@@ -4,6 +4,7 @@ namespace MODX\Revolution\Composer;
 
 use Boffinate\ComposerOps\ComposerOps;
 use Boffinate\ComposerOps\Core\ComposerBinary;
+use Boffinate\ComposerOps\Core\ComposerHome;
 use Boffinate\ComposerOps\Core\ComposerOptions;
 use Boffinate\ComposerOps\Core\ProjectContext;
 use Boffinate\ComposerOps\Job\DetachedSpawner;
@@ -12,7 +13,6 @@ use Boffinate\ComposerOps\Job\JobManager;
 use Boffinate\ComposerOps\Job\JobOperation;
 use Boffinate\ComposerOps\Job\JobRecord;
 use Boffinate\ComposerOps\Job\JobSpec;
-use Boffinate\ComposerOps\Job\JobStatus;
 use Boffinate\ComposerOps\Lock\SymfonyLockManager;
 use Boffinate\ComposerOps\Runner\LocalProcessRunner;
 use MODX\Revolution\modX;
@@ -55,8 +55,9 @@ class ComposerService
 
     /**
      * A Pending job older than this, in seconds, is presumed to be a dead
-     * spawn (the worker never launched) and is cancelled instead of tripping
-     * the busy guard forever.
+     * spawn (the worker never launched). JobManager reconciles such records
+     * to Failed on every get()/list(), so they cannot trip the busy guard
+     * forever.
      */
     private const STALE_PENDING_SECONDS = 900;
 
@@ -133,9 +134,9 @@ class ComposerService
     {
         return $this->context ??= new ProjectContext(
             $this->projectRoot,
-            $this->getPhpBinary(),
-            $this->getComposerBinary(),
-            ['COMPOSER_HOME' => $this->workDir('home')]
+            composerHome: ComposerHome::provided($this->workDir('home')),
+            phpBinary: $this->getPhpBinary(),
+            composerBinary: $this->getComposerBinary()
         );
     }
 
@@ -149,7 +150,8 @@ class ComposerService
         return $this->jobManager ??= new JobManager(
             $this->jobStore(),
             $this->ops(),
-            $this->workDir('logs')
+            $this->workDir('logs'),
+            stalePendingSeconds: self::STALE_PENDING_SECONDS
         );
     }
 
@@ -192,26 +194,35 @@ class ComposerService
         $manager = $this->jobManager();
         $records = $manager->list();
         $this->pruneHistory($records);
-        $this->assertNotBusy($manager, $records);
+        $this->assertNotBusy($records);
+
+        // A targeted `composer update pkg` pins every other package to its
+        // locked version, so a new release that raises a floor on one of its
+        // own dependencies "succeeds" as a silent no-op (exit 0, "Nothing to
+        // modify in lock file"). --with-all-dependencies lets composer move
+        // whatever else must move, which is what "Update Package" means to a
+        // Manager user. Deliberately not a try-conservative-then-prompt flow:
+        // the conservative run does not fail, so there is nothing to prompt
+        // on (see composer-ops planning/decisions.md, 2026-08-07).
+        $withAllDependencies = $operation === JobOperation::Update && $packages !== [];
 
         $phpBinary = $this->getPhpBinary();
         $spec = new JobSpec(
-            $operation,
-            $this->projectRoot,
-            $packages,
-            $dev,
-            $this->options(self::JOB_TIMEOUT_SECONDS),
-            $phpBinary,
-            $this->getComposerPharPath(),
-            ['COMPOSER_HOME' => $this->workDir('home')]
+            operation: $operation,
+            projectRoot: $this->projectRoot,
+            composerHome: ComposerHome::provided($this->workDir('home')),
+            packages: $packages,
+            dev: $dev,
+            options: $this->options(self::JOB_TIMEOUT_SECONDS, $withAllDependencies),
+            phpBinary: $phpBinary,
+            composerPharPath: $this->getComposerPharPath()
         );
 
         $record = $manager->submit($spec);
 
         try {
             (new DetachedSpawner())->spawn(
-                [$phpBinary, $this->projectRoot . '/bin/modx-composer', 'job-run', $record->id],
-                $record->logPath
+                [$phpBinary, $this->projectRoot . '/bin/modx-composer', 'job-run', $record->id]
             );
         } catch (Throwable $exception) {
             // Never leave an unrunnable job pending: it would trip the busy
@@ -265,13 +276,15 @@ class ComposerService
 
     /**
      * @param int $timeoutSeconds
+     * @param bool $withAllDependencies
      * @return ComposerOptions
      */
-    private function options(int $timeoutSeconds): ComposerOptions
+    private function options(int $timeoutSeconds, bool $withAllDependencies = false): ComposerOptions
     {
         return ComposerOptions::fromArray([
             'noProgress' => true,
             'timeoutSeconds' => $timeoutSeconds,
+            'withAllDependencies' => $withAllDependencies,
         ]);
     }
 
@@ -306,28 +319,19 @@ class ComposerService
     }
 
     /**
-     * Fail fast while any earlier job is still in flight. A Pending record
-     * past the stale threshold means its worker never launched (or died
-     * before marking itself Running); it is cancelled rather than allowed to
-     * wedge the busy guard forever.
+     * Fail fast while any earlier job is still in flight. Stale records never
+     * wedge this guard: JobManager::list() has already reconciled dead
+     * workers and aged-out Pending records to Failed (terminal) before they
+     * reach here.
      *
-     * @param JobManager $manager
      * @param JobRecord[] $records
      * @return void
      * @throws ComposerBusyException
      */
-    private function assertNotBusy(JobManager $manager, array $records): void
+    private function assertNotBusy(array $records): void
     {
-        $now = time();
         foreach ($records as $existing) {
             if ($existing->isTerminal()) {
-                continue;
-            }
-            if (
-                $existing->status === JobStatus::Pending
-                && ($now - $existing->createdAt->getTimestamp()) > self::STALE_PENDING_SECONDS
-            ) {
-                $manager->cancel($existing->id);
                 continue;
             }
             throw new ComposerBusyException(sprintf(

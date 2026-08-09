@@ -204,7 +204,7 @@ MODx.grid.ComposerJobs = function(config) {
         url: MODx.config.connector_url,
         baseParams: {action: 'Workspace/Composer/Jobs/GetList'},
         fields: ['id', 'operation', 'packages', 'status', 'createdAt', 'exitCode',
-            'failureReason', 'durationMs', 'error'],
+            'failureReason', 'durationMs', 'pgid', 'error'],
         paging: true,
         remoteSort: false,
         primaryKey: 'id',
@@ -367,14 +367,16 @@ Ext.extend(MODx.window.ComposerInstall, MODx.Window, {
         var form = this.fp.getForm();
         var name = String(form.findField('package').getValue() || '').trim();
         var constraintField = form.findField('constraint');
-        // composer-ops' package grammar forbids whitespace in constraints (so
-        // nothing flag-like can reach argv); fold the common human spacings
-        // and reject anything still containing spaces (e.g. hyphen ranges).
+        // composer-ops' package grammar accepts real Composer constraint
+        // syntax: space-separated tokens of printable ASCII ("^1.0 || ^2.0",
+        // ">=1.0 <2.0", "1.0 - 2.0"), but no leading "-" (flag-safety) and
+        // no control characters. Fold whitespace runs (tabs, newlines) into
+        // single spaces, then pre-check what the grammar would reject.
         var constraint = String(constraintField.getValue() || '').trim()
-            .replace(/\s*\|\|\s*/g, '||').replace(/\s*,\s*/g, ',');
+            .replace(/\s+/g, ' ');
         constraintField.setValue(constraint);
-        if (/\s/.test(constraint)) {
-            constraintField.markInvalid(_('composer_constraint_no_spaces'));
+        if (constraint.charAt(0) === '-' || /[^\x20-\x7E]/.test(constraint)) {
+            constraintField.markInvalid(_('composer_constraint_invalid'));
             return false;
         }
         form.findField('packages').setValue(
@@ -492,7 +494,17 @@ Ext.extend(MODx.window.ComposerJob, Ext.Window, {
     appendFinalStatus: function(job) {
         var parts = [_('composer_job_status') + ': ' + (job.status || '')]
             .concat(MODx.util.composerJobResult(job));
-        this.appendLog('\n\n' + parts.join(' | ') + '\n');
+        // Older records persisted before the pgid field existed have null.
+        if (job.pgid !== null && job.pgid !== undefined && job.pgid !== '') {
+            parts.push(_('composer_job_pgid') + ': ' + job.pgid);
+        }
+        var text = parts.join(' | ');
+        // A succeeded job can still be a no-op (constraints already satisfied
+        // or blocking); say so instead of leaving a bare "succeeded".
+        if (job.noChanges) {
+            text += '\n' + _('composer_job_no_changes');
+        }
+        this.appendLog('\n\n' + text + '\n');
     },
 
     cancelJob: function() {

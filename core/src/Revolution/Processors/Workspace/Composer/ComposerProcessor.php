@@ -266,6 +266,7 @@ abstract class ComposerProcessor extends Processor
             'exitCode' => $record->exitCode,
             'failureReason' => $record->failureReason?->value,
             'durationMs' => $record->durationMs,
+            'pgid' => $record->pgid,
             'error' => $record->error === null ? null : $this->scrubUtf8($record->error),
         ];
     }

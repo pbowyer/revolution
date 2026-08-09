@@ -3,6 +3,7 @@
 namespace MODX\Revolution\Processors\Workspace\Composer\Jobs;
 
 use Boffinate\ComposerOps\Job\JobRecord;
+use Boffinate\ComposerOps\Job\JobStatus;
 use MODX\Revolution\Processors\Workspace\Composer\ComposerProcessor;
 
 /**
@@ -49,8 +50,30 @@ class Get extends ComposerProcessor
         $data['logChunk'] = $logChunk;
         $data['logSize'] = $logSize;
         $data['done'] = $record->isTerminal();
+        $data['noChanges'] = $record->status === JobStatus::Succeeded
+            && $logPath !== null
+            && $this->logReportsNoChanges($logPath);
 
         return $this->success('', $data);
+    }
+
+    /**
+     * Whether a succeeded mutation actually changed anything: composer prints
+     * "Nothing to modify in lock file" when an update/require resolves to the
+     * already-locked versions (e.g. a targeted update whose newer releases are
+     * blocked by the project's constraints), and exits 0 anyway. Composer
+     * output is not localized and jobs run with --no-ansi, so a plain string
+     * match on the full log is stable. Only called on terminal polls, so the
+     * extra full-file read happens once per job, not per poll.
+     *
+     * @param string $logPath
+     * @return bool
+     */
+    private function logReportsNoChanges(string $logPath): bool
+    {
+        $log = @file_get_contents($logPath);
+
+        return is_string($log) && strpos($log, 'Nothing to modify in lock file') !== false;
     }
 
     /**

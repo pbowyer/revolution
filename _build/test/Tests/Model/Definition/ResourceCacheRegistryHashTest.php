@@ -14,6 +14,13 @@ use xPDO\xPDO;
 
 class ResourceCacheRegistryHashTest extends MODxTestCase
 {
+    /** @after */
+    public function tearDownFixtures()
+    {
+        $this->modx->setDefinitionRegistry(new DefinitionRegistry());
+        parent::tearDownFixtures();
+    }
+
     public function testResourceCacheCompatibilityRequiresExactRegistryHash()
     {
         $this->modx->setDefinitionRegistry($this->registry('release-a'));

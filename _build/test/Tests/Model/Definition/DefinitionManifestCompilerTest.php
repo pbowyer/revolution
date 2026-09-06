@@ -362,6 +362,31 @@ class DefinitionManifestCompilerTest extends XTestCase
         $this->assertSame($catalog, $artifact->load($path));
     }
 
+    public function testEmptyChunkContentSurvivesRegistryAndArtifactLoading(): void
+    {
+        file_put_contents($this->fixtureRoot . '/elements/Empty.html', '');
+        $manifest = $this->fixtureRoot . '/modx.php';
+        file_put_contents($manifest, '<?php return ' . var_export([
+            'schema' => 1,
+            'package' => 'acme/empty',
+            'root' => $this->fixtureRoot,
+            'elements' => ['chunks' => ['EmptyChunk' => ['file' => 'elements/Empty.html']]],
+        ], true) . ';');
+        $catalog = (new DefinitionManifestCompiler())->compile([$manifest]);
+        $registry = new DefinitionRegistry($catalog);
+
+        $this->assertSame('', $registry->getDefinition(\MODX\Revolution\modChunk::class, 'EmptyChunk')['content']);
+
+        $artifact = new DefinitionRegistryArtifact();
+        $path = $this->fixtureRoot . '/' . $catalog['release_hash'] . '.php';
+        $artifact->writeImmutable($path, $catalog);
+        $loaded = $artifact->load($path);
+
+        $this->assertSame($catalog, $loaded);
+        $this->assertSame('', (new DefinitionRegistry($loaded))
+            ->getDefinition(\MODX\Revolution\modChunk::class, 'EmptyChunk')['content']);
+    }
+
     public function testCompiledArtifactRejectsTamperedCatalogContent()
     {
         $manifest = $this->writeManifest('return "original";');
@@ -437,6 +462,64 @@ class DefinitionManifestCompilerTest extends XTestCase
         $this->assertTrue($artifact->writeImmutable($path, $catalog));
         $this->assertSame($catalog, $artifact->load($path));
         $this->assertFalse($artifact->writeImmutable($path, $catalog));
+    }
+
+    public function testManifestPathsAndPackageRootsMustBeAbsolute(): void
+    {
+        $manifest = $this->writeManifest();
+
+        try {
+            (new DefinitionManifestCompiler())->compile([substr($manifest, 1)]);
+            $this->fail('A relative manifest path must be rejected.');
+        } catch (RuntimeException $exception) {
+            $this->assertStringContainsString('absolute path', $exception->getMessage());
+        }
+
+        file_put_contents($manifest, str_replace("'root' => __DIR__,", "'root' => 'elements',", file_get_contents($manifest)));
+        try {
+            (new DefinitionManifestCompiler())->compile([$manifest]);
+            $this->fail('A relative package root must be rejected.');
+        } catch (RuntimeException $exception) {
+            $this->assertStringContainsString('absolute, readable package root', $exception->getMessage());
+        }
+    }
+
+    public function testPackageRootMustNotBeTheFilesystemRoot(): void
+    {
+        $manifest = $this->writeManifest();
+        file_put_contents($manifest, str_replace("'root' => __DIR__,", "'root' => '/',", file_get_contents($manifest)));
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('must not be the filesystem root');
+
+        (new DefinitionManifestCompiler())->compile([$manifest]);
+    }
+
+    public function testImmutableArtifactWriterLeavesNoTemporaryFileWhenPublicationFails(): void
+    {
+        $manifest = $this->writeManifest('return "leak";');
+        $catalog = (new DefinitionManifestCompiler())->compile([$manifest]);
+        $path = $this->fixtureRoot . '/elements/' . $catalog['release_hash'] . '.php';
+        $artifact = new class extends DefinitionRegistryArtifact {
+            protected function publishHardLink(string $temporary, string $path): bool
+            {
+                return false;
+            }
+
+            protected function publishAtomically(string $temporary, string $path): bool
+            {
+                throw new RuntimeException('publication lock unavailable');
+            }
+        };
+
+        try {
+            $artifact->writeImmutable($path, $catalog);
+            $this->fail('A failed publication must propagate.');
+        } catch (RuntimeException $exception) {
+            $this->assertSame('publication lock unavailable', $exception->getMessage());
+        }
+        $this->assertSame([], glob($this->fixtureRoot . '/elements/.definition-registry-*') ?: []);
+        $this->assertFileDoesNotExist($path);
     }
 
     public function testManifestCollectionsMustHaveTheDeclaredShape()

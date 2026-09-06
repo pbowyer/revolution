@@ -52,8 +52,8 @@ class DefinitionManifestCompiler
         $sourceCache = [];
 
         foreach ($manifestPaths as $manifestPath) {
-            if (!is_string($manifestPath) || $manifestPath === '') {
-                throw new RuntimeException('Every definition manifest path must be a non-empty string.');
+            if (!is_string($manifestPath) || !self::isAbsolutePath($manifestPath)) {
+                throw new DefinitionManifestInputException('Every definition manifest path must be an absolute path.');
             }
 
             $manifestFile = realpath($manifestPath);
@@ -80,10 +80,16 @@ class DefinitionManifestCompiler
             }
             $knownPackages[$package] = true;
 
-            $root = isset($manifest['root']) && is_string($manifest['root']) ? realpath($manifest['root']) : false;
+            $declaredRoot = $manifest['root'] ?? null;
+            $root = is_string($declaredRoot) && self::isAbsolutePath($declaredRoot) ? realpath($declaredRoot) : false;
             if ($root === false || !is_dir($root)) {
                 throw new DefinitionManifestInputException(
-                    "Definition manifest has an invalid package root: {$manifestFile}"
+                    "Definition manifest must declare an absolute, readable package root: {$manifestFile}"
+                );
+            }
+            if ($root === DIRECTORY_SEPARATOR) {
+                throw new RuntimeException(
+                    "Definition manifest package root must not be the filesystem root: {$manifestFile}"
                 );
             }
 
@@ -267,7 +273,7 @@ class DefinitionManifestCompiler
                 }
 
                 $priority = $listener['priority'] ?? 0;
-                if (!is_int($priority) && !(is_string($priority) && preg_match('/^-?\d+$/', $priority))) {
+                if (!is_int($priority) && !(is_string($priority) && preg_match('/\A-?\d+\z/', $priority))) {
                     throw new RuntimeException("Listener priority must be an integer for {$key}");
                 }
                 $contexts = $listener['contexts'] ?? [];
@@ -359,7 +365,7 @@ class DefinitionManifestCompiler
 
     private function resolveSourceFile($relativePath, string $root, string $definition): string
     {
-        if (!is_string($relativePath) || $relativePath === '' || $relativePath[0] === '/') {
+        if (!is_string($relativePath) || $relativePath === '' || self::isAbsolutePath($relativePath)) {
             throw new RuntimeException("Definition source path must be relative for {$definition}");
         }
         $sourceFile = realpath($root . DIRECTORY_SEPARATOR . $relativePath);
@@ -371,6 +377,11 @@ class DefinitionManifestCompiler
         $this->assertContained($sourceFile, $root, $definition);
 
         return $sourceFile;
+    }
+
+    private static function isAbsolutePath(string $path): bool
+    {
+        return $path !== '' && $path[0] === DIRECTORY_SEPARATOR;
     }
 
     private function assertContained(string $path, string $root, string $label): void

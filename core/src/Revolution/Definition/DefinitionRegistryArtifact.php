@@ -103,15 +103,17 @@ class DefinitionRegistryArtifact
             );
         }
         $temporary = $this->writeTemporaryArtifact($path, $catalog);
-        if ($this->publishHardLink($temporary, $path)) {
-            unlink($temporary);
-
-            return true;
-        }
-        if ($this->publishAtomically($temporary, $path)) {
+        try {
+            if ($this->publishHardLink($temporary, $path)) {
+                return true;
+            }
+            $published = $this->publishAtomically($temporary, $path);
+        } finally {
             @unlink($temporary);
-            $published = $this->load($path);
-            if (hash_equals($catalog['release_hash'], $published['release_hash'])) {
+        }
+        if ($published) {
+            $publishedCatalog = $this->load($path);
+            if (hash_equals($catalog['release_hash'], $publishedCatalog['release_hash'])) {
                 return true;
             }
 
@@ -119,7 +121,6 @@ class DefinitionRegistryArtifact
                 "Content-addressed definition registry already exists with another hash: {$path}"
             );
         }
-        @unlink($temporary);
         if (is_link($path)) {
             throw new RuntimeException("Content-addressed definition registry path must not be a symlink: {$path}");
         }

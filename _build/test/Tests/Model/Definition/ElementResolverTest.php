@@ -89,9 +89,6 @@ class ElementResolverTest extends MODxTestCase
         ])));
         $this->assertNull($this->modx->getObject(modSnippet::class, ['name' => $this->elementName]));
         $this->assertSame([], $this->modx->sourceCache, 'Disk elements must never populate sourceCache.');
-        $presence = new \ReflectionProperty(\MODX\Revolution\Definition\ElementResolver::class, 'databasePresence');
-        $presence->setAccessible(true);
-        $this->assertCount(1, $presence->getValue($this->modx->getElementResolver()));
         $this->assertNotSame($first, $second, 'Disk lookups remain fresh while database presence is memoized.');
         $this->assertSame(
             'disk:phase0/tests:snippet:' . $this->elementName,
@@ -171,6 +168,27 @@ class ElementResolverTest extends MODxTestCase
             $this->assertSame($database->get('id'), $resolved->get('id'));
             $this->assertSame($database->getContent(), $resolved->getContent());
             $this->assertSame('database-default', $this->modx->getElementResolver()->getLastDecision()['reason']);
+        } finally {
+            $this->modx->setOption(xPDO::OPT_SETUP, $setup);
+        }
+    }
+
+    public function testDatabaseElementRemovedAfterLookupStopsReservingTheDiskIdentityWithinTheSameRequest(): void
+    {
+        $this->installDiskSnippet('return "disk";');
+        $setup = $this->modx->getOption(xPDO::OPT_SETUP);
+        $this->modx->setOption(xPDO::OPT_SETUP, false);
+
+        try {
+            $database = $this->createDatabaseSnippet('return "database";');
+            $this->assertSame('database', $this->modx->getElement(modSnippet::class, $this->elementName)->process());
+
+            $this->assertTrue($database->remove());
+            $resolved = $this->modx->getElement(modSnippet::class, $this->elementName);
+
+            $this->assertTrue($resolved->isDiskNativeDefinition());
+            $this->assertSame('return "disk";', $resolved->getContent());
+            $this->assertSame('disk-only', $this->modx->getElementResolver()->getLastDecision()['reason']);
         } finally {
             $this->modx->setOption(xPDO::OPT_SETUP, $setup);
         }

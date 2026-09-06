@@ -213,7 +213,7 @@ class EventDispatcherTest extends MODxTestCase
             $this->assertSame($registry->getReleaseHash(), $cached['release_hash']);
             $this->assertArrayHasKey('disksequence', $cached['events']);
             $this->assertTrue($cached['plugins'][DefinitionRegistry::normalizeName($listener['plugin'])]);
-            $this->assertArrayHasKey('DiskSequence', $cached['priorities']);
+            $this->assertArrayHasKey('disksequence', $cached['priorities']);
             $this->assertSame([0], $cacheManager->lifetimes(), 'Facts are cached indefinitely.');
 
             $sets = $cacheManager->setCount();
@@ -509,7 +509,7 @@ class EventDispatcherTest extends MODxTestCase
         $this->assertIsArray($cacheManager->entries[$cacheKey]['events']['disksequence']);
         $this->assertSame(
             [$plugin->get('id') => 0],
-            $cacheManager->entries[$cacheKey]['priorities']['DiskSequence']
+            $cacheManager->entries[$cacheKey]['priorities']['disksequence']
         );
     }
 
@@ -1124,6 +1124,82 @@ class EventDispatcherTest extends MODxTestCase
         $this->assertSame($eventMap, $this->modx->eventMap);
         $this->assertArrayNotHasKey('DiskSequence', $eventMap);
         $this->assertFalse($this->modx->invokeEvent('DiskSequence'));
+    }
+
+    public function testDatabaseOnlyEventNameMatchingStaysCaseSensitive(): void
+    {
+        $this->modx->setDefinitionRegistry(new DefinitionRegistry());
+        $this->modx->eventMap['DiskSequence'] = ['999999' => '999999'];
+
+        $this->assertFalse($this->modx->invokeEvent('disksequence'));
+        $this->assertFalse($this->modx->removeEventListener('disksequence'));
+        $this->assertTrue($this->modx->addEventListener('DISKSEQUENCE', 999998));
+        $this->assertSame(['999998' => '999998'], $this->modx->eventMap['DISKSEQUENCE']);
+        $this->assertSame(['999999' => '999999'], $this->modx->eventMap['DiskSequence']);
+        unset($this->modx->eventMap['DISKSEQUENCE']);
+    }
+
+    public function testSuppressedDiskListenerCannotBeReprojectedThroughPublicApiOrEventMap(): void
+    {
+        $plugin = $this->createDatabasePlugin('return $modx->event->output("disabled");', true);
+        $disk = $this->listener('reprojected', 0, 'disk');
+        $disk['plugin'] = $plugin->get('name');
+        $this->installRegistry([], [$disk], [
+            modPlugin::class => [strtolower($plugin->get('name')) => $this->pluginDefinition($plugin->get('name'))],
+        ]);
+
+        $this->assertFalse($this->modx->addEventListener('DiskSequence', $disk['key']));
+
+        $this->modx->eventMap['DiskSequence'][$disk['key']] = $disk['key'];
+        $this->assertSame([], $this->modx->invokeEvent('DiskSequence', ['requestValue' => 'request']));
+    }
+
+    public function testReaddedDiskListenerWithoutASetSuffixRunsWithoutTheManifestPropertySet(): void
+    {
+        $listener = $this->listener('readd-plain', 0, 'unused');
+        $listener['plugin'] = 'PlainPlugin';
+        $listener['property_set'] = 'Featured';
+        $listener['content'] = '<?php $modx->event->output($mode ?? "none");';
+        $definition = $this->pluginDefinition('PlainPlugin');
+        $definition['property_sets'] = ['Featured' => ['mode' => 'featured']];
+        $this->installRegistry([], [$listener], [modPlugin::class => ['plainplugin' => $definition]]);
+
+        $this->assertSame(['featured'], $this->modx->invokeEvent('DiskSequence'));
+
+        $this->assertTrue($this->modx->removeEventListener('DiskSequence', $listener['key']));
+        $this->assertTrue($this->modx->addEventListener('DiskSequence', $listener['key']));
+        $this->assertSame($listener['key'], $this->modx->eventMap['DiskSequence'][$listener['key']]);
+        $this->assertSame(['none'], $this->modx->invokeEvent('DiskSequence'));
+    }
+
+    public function testRowlessEventNumericBindingsAreStrippedWhenItsListenersTargetAnotherContext(): void
+    {
+        $listener = $this->listener('manager-only', 0, 'mgr');
+        $listener['contexts'] = ['mgr'];
+        $eventMap = ['DiskSequence' => ['7' => '7']];
+
+        (new EventDispatcher($this->modx, $this->registry([], [$listener])))->activateContext('web', $eventMap);
+
+        $this->assertSame([], $eventMap['DiskSequence'] ?? []);
+    }
+
+    public function testDiskPluginDefinitionFromAnotherPackageLendsNoDefaultsToAListener(): void
+    {
+        $listener = $this->listener('foreign-plugin', 0, 'unused');
+        $listener['plugin'] = 'SharedPlugin';
+        $listener['properties'] = [];
+        $listener['content'] = '<?php $modx->event->output($marker ?? "none");';
+        $definition = $this->pluginDefinition('SharedPlugin');
+        $definition['key'] = 'disk:other/package:plugin:SharedPlugin';
+        $definition['package'] = 'other/package';
+        $definition['properties'] = ['marker' => 'other'];
+        $this->installRegistry([], [$listener], [modPlugin::class => ['sharedplugin' => $definition]]);
+
+        $this->assertSame(['none'], $this->modx->invokeEvent('DiskSequence'));
+        $this->assertSame(
+            $listener['key'],
+            $this->modx->getDefinitionEventDispatcher()->resolvePlugin($listener)->getDefinitionMetadata()['definition_key']
+        );
     }
 
     private function listener(string $key, int $priority, string $marker): array

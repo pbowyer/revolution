@@ -2,7 +2,6 @@
 
 namespace MODX\Revolution;
 
-use MODX\Revolution\Definition\DatabasePresenceInvalidatorInterface;
 use MODX\Revolution\Definition\DefinitionRegistry;
 use MODX\Revolution\Filters\modInputFilter;
 use MODX\Revolution\Filters\modOutputFilter;
@@ -223,15 +222,8 @@ class modElement extends modAccessibleSimpleObject
         $oldPath = $this->getOldStaticFilePath();
 
         $saved = parent::save($cacheFlag);
-        if (
-            $saved
-            && !$this->xpdo->getOption(xPDO::OPT_SETUP)
-            && method_exists($this->xpdo, 'getElementResolverIfInitialized')
-        ) {
-            $resolver = $this->xpdo->getElementResolverIfInitialized();
-            if ($resolver instanceof DatabasePresenceInvalidatorInterface) {
-                $resolver->invalidateDatabasePresence(static::class);
-            }
+        if ($saved && $this->xpdo instanceof modX) {
+            $this->xpdo->invalidateElementPresence(static::class);
         }
         if (!$this->getOption(xPDO::OPT_SETUP)) {
             if ($saved && $staticContentChanged) {
@@ -255,10 +247,17 @@ class modElement extends modAccessibleSimpleObject
     public function remove(array $ancestors = [])
     {
         if ($this->isDiskNativeDefinition()) {
-            throw new \LogicException('Disk-native definitions are deployment-owned and cannot be removed through xPDO.');
+            throw new \LogicException(
+                'Disk-native definitions are deployment-owned and cannot be removed through xPDO.'
+            );
         }
 
-        return parent::remove($ancestors);
+        $removed = parent::remove($ancestors);
+        if ($removed && $this->xpdo instanceof modX) {
+            $this->xpdo->invalidateElementPresence(static::class);
+        }
+
+        return $removed;
     }
 
     public function setDefinitionMetadata(array $metadata): void

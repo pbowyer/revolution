@@ -17,7 +17,7 @@ class DefinitionRegistryDeploymentTest extends MODxTestCase
 {
     private string $fixtureRoot;
     private string $manifest;
-    private ?string $warmedScriptCacheKey = null;
+    private array $warmedScriptCacheKeys = [];
 
     /** @before */
     public function setUpFixtures()
@@ -44,15 +44,16 @@ class DefinitionRegistryDeploymentTest extends MODxTestCase
                 'definition_registry'
             ),
         ]);
-        if ($this->warmedScriptCacheKey !== null) {
-            $this->modx->getCacheManager()->delete($this->warmedScriptCacheKey, [
+        foreach ($this->warmedScriptCacheKeys as $scriptCacheKey) {
+            $this->modx->getCacheManager()->delete($scriptCacheKey, [
                 xPDO::OPT_CACHE_KEY => $this->modx->getOption('cache_scripts_key', null, 'scripts'),
             ]);
-            $include = $this->modx->getCachePath() . 'includes/' . $this->warmedScriptCacheKey . '.include.cache.php';
+            $include = $this->modx->getCachePath() . 'includes/' . $scriptCacheKey . '.include.cache.php';
             if (is_file($include)) {
                 unlink($include);
             }
         }
+        $this->warmedScriptCacheKeys = [];
         $iterator = new \RecursiveIteratorIterator(
             new \RecursiveDirectoryIterator($this->fixtureRoot, \FilesystemIterator::SKIP_DOTS),
             \RecursiveIteratorIterator::CHILD_FIRST
@@ -302,23 +303,46 @@ class DefinitionRegistryDeploymentTest extends MODxTestCase
 
     public function testWarmClearsResourcesAndWarmsTheActiveRelease()
     {
-        $compiled = $this->deployment()->compile();
+        file_put_contents(
+            $this->fixtureRoot . '/elements/DeployListener.php',
+            '<?php return $modx->event->output("listener");'
+        );
+        $manifest = $this->fixtureRoot . '/manifest-listener.php';
+        file_put_contents($manifest, str_replace(
+            "'listeners' => [],",
+            "'listeners' => [['key' => 'warm', 'event' => 'OnDeployWarm', 'file' => 'elements/DeployListener.php']],",
+            $this->manifestSource()
+        ));
+        $compiled = $this->deployment(['definition_manifests' => [$manifest]])->compile();
         $catalog = (new DefinitionRegistryArtifact())->load($compiled['artifact']);
         $definition = $catalog['definitions'][modSnippet::class]['deploysnippet'];
-        $this->warmedScriptCacheKey = DefinitionRegistry::scriptCacheKey(
-            $definition['key'],
-            $definition['content_hash']
-        );
+        $listener = $catalog['listeners']['disk:acme/deployment:listener:warm'];
+        $this->warmedScriptCacheKeys = [
+            DefinitionRegistry::scriptCacheKey($definition['key'], $definition['content_hash']),
+        ];
+        $cacheManager = $this->modx->getCacheManager();
+        $resourceCacheOptions = $cacheManager->getPartitionOptions('resource');
+        $staleResource = ['stale' => true];
+        $this->assertTrue($cacheManager->set('web/resources/999999', $staleResource, 0, $resourceCacheOptions));
         $deployment = $this->deployment([
+            'definition_manifests' => [$manifest],
             'definition_registry_artifact' => $compiled['artifact'],
         ]);
 
         $result = $deployment->warm();
         $hash = $deployment->hash();
+        $this->warmedScriptCacheKeys[] = $this->modx->getDefinitionEventDispatcher()
+            ->resolvePlugin($listener)
+            ->getScriptCacheKey();
 
         $this->assertSame($compiled['release_hash'], $result['release_hash']);
-        $this->assertTrue($result['resource_cache_cleared']);
-        $this->assertSame(1, $result['scripts_warmed']);
+        $this->assertNull($cacheManager->get('web/resources/999999', $resourceCacheOptions));
+        $this->assertSame(2, $result['scripts_warmed']);
+        foreach ($this->warmedScriptCacheKeys as $scriptCacheKey) {
+            $this->assertFileExists(
+                $this->modx->getCachePath() . 'includes/' . $scriptCacheKey . '.include.cache.php'
+            );
+        }
         $this->assertContains('web', $result['contexts']);
         $this->assertTrue($hash['matches_active']);
         $this->assertTrue($hash['matches_warmed']);

@@ -94,9 +94,10 @@ class DefinitionLifecycleTest extends MODxTestCase
             $this->fail('A removed source file must be observed on the next manifest request.');
         } catch (\RuntimeException $exception) {
             $this->assertStringContainsString('not readable', $exception->getMessage());
+        } finally {
+            file_put_contents($this->fixtureRoot . '/snippet.php', '<?php return "restored";');
         }
 
-        file_put_contents($this->fixtureRoot . '/snippet.php', '<?php return "restored";');
         unlink($manifest);
         try {
             $this->freshRegistry($manifest);

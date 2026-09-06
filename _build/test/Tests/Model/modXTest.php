@@ -472,6 +472,17 @@ class modXTest extends MODxTestCase
     }
 
     /**
+     * Stock accepted a null or empty property set as "no set"; the disk-aware
+     * signature must keep that contract for existing callers.
+     */
+    public function testAddEventListenerTreatsNullPropertySetAsNoSet()
+    {
+        $this->assertTrue($this->modx->addEventListener('UnitTestRemoveListener', 5, null));
+        $this->assertTrue($this->modx->addEventListener('UnitTestRemoveListener', 6, 'mySet'));
+        $this->assertSame(['5' => '5', '6' => '6:mySet'], $this->modx->eventMap['UnitTestRemoveListener']);
+    }
+
+    /**
      * The documented removal behaviors still hold: numeric plugin id and disk
      * listener key each remove a single listener; the default 0 sentinel removes
      * every listener for the event.

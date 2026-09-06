@@ -14,6 +14,7 @@ use Exception;
 use GuzzleHttp\Client;
 use GuzzleHttp\Psr7\HttpFactory;
 use MODX\Revolution\Formatter\modManagerDateFormatter;
+use MODX\Revolution\Definition\DatabasePresenceInvalidatorInterface;
 use MODX\Revolution\Definition\DefinitionManifestCompiler;
 use MODX\Revolution\Definition\DefinitionRegistry;
 use MODX\Revolution\Definition\DefinitionRegistryArtifact;
@@ -116,7 +117,8 @@ class modX extends xPDO {
      */
     protected $elementResolver = null;
     /**
-     * Save hooks need the last active resolver without invoking a lazy service factory.
+     * @var ElementResolverInterface|null The last resolver handed out, so save hooks
+     * can invalidate it without invoking a lazy service factory.
      */
     protected $initializedElementResolver = null;
     /**
@@ -931,16 +933,21 @@ class modX extends xPDO {
     }
 
     /**
-     * Persistence hooks must invalidate an existing resolver without causing
-     * registry bootstrap, which may be intentionally unavailable during a save.
+     * Forget cached database presence for an element class after a persisted
+     * write, so a new twin starts winning and a deleted twin stops reserving
+     * its disk identity within the same request. Only an already-initialized
+     * resolver is told: a save must not trigger registry bootstrap, which may
+     * be intentionally unavailable at that point.
      */
-    public function getElementResolverIfInitialized(): ?ElementResolverInterface
+    public function invalidateElementPresence(string $class): void
     {
-        if ($this->initializedElementResolver instanceof ElementResolverInterface) {
-            return $this->initializedElementResolver;
+        if ($this->getOption(xPDO::OPT_SETUP)) {
+            return;
         }
-
-        return $this->elementResolver instanceof ElementResolverInterface ? $this->elementResolver : null;
+        $resolver = $this->initializedElementResolver ?? $this->elementResolver;
+        if ($resolver instanceof DatabasePresenceInvalidatorInterface) {
+            $resolver->invalidateDatabasePresence($class);
+        }
     }
 
     public function getDefinitionEventDispatcher(): EventDispatcher
@@ -995,7 +1002,8 @@ class modX extends xPDO {
             } catch (\Throwable $exception) {
                 $this->log(
                     self::LOG_LEVEL_ERROR,
-                    "Definition registry bootstrap failed for artifact {$artifact}; recover only by unsetting definition_registry_artifact."
+                    "Definition registry bootstrap failed for artifact {$artifact};"
+                    . " recover only by unsetting definition_registry_artifact."
                 );
                 throw $exception;
             }
@@ -1026,7 +1034,7 @@ class modX extends xPDO {
         $this->assertDefinitionRegistryArtifactIsReleaseOwned($artifact);
         [$realPath, $identity] = $loader->resolveIdentity($artifact);
         $cacheKey = 'artifact-validation-' . $identity;
-        $cacheOptions = $this->getCacheManager()->getPartitionOptions('definition_registry');
+        $cacheOptions = $this->getCacheManager()->getPartitionOptions(DefinitionRegistry::CACHE_PARTITION);
         $validatedReleaseHash = null;
         try {
             $cached = $this->getCacheManager()->get($cacheKey, $cacheOptions);
@@ -1995,9 +2003,7 @@ class modX extends xPDO {
             return false;
         if ($this->eventMap === null && $this->context instanceof modContext)
             $this->_initEventMap($this->context->get('key'));
-        $dispatchEventName = is_string($eventName)
-            ? ($this->findNormalizedEventMapKey($eventName) ?? null)
-            : null;
+        $dispatchEventName = is_string($eventName) ? $this->findNormalizedEventMapKey($eventName) : null;
         if ($dispatchEventName === null) {
             //$this->log(modX::LOG_LEVEL_DEBUG,'System event '.$eventName.' was executed but does not exist.');
             return false;
@@ -2017,7 +2023,7 @@ class modX extends xPDO {
                 $plugin = $dispatcher->resolvePlugin($listener);
                 $this->Event = clone $this->event;
                 $this->event->resetEventObject();
-                $this->event->name= $dispatchEventName;
+                $this->event->name = $dispatchEventName;
                 if ($plugin) {
                     $this->event->plugin =& $plugin;
                     $this->event->activated= true;
@@ -2386,14 +2392,14 @@ class modX extends xPDO {
                     || preg_match('/\A\d+:/', (string) $pluginId)
                 )
             ) {
-                unset ($this->eventMap[$eventMapKey][(string) $pluginId]);
+                unset($this->eventMap[$eventMapKey][(string) $pluginId]);
             } elseif (is_string($pluginId) && ($listenerKey = $this->extractDiskListenerKey($pluginId)) !== null) {
                 if (!isset($this->eventMap[$eventMapKey][$listenerKey])) {
                     return false;
                 }
                 unset($this->eventMap[$eventMapKey][$listenerKey]);
             } else {
-                unset ($this->eventMap[$eventMapKey]);
+                unset($this->eventMap[$eventMapKey]);
             }
             $removed = true;
         }
@@ -2436,17 +2442,19 @@ class modX extends xPDO {
      * @return boolean true if the event is successfully added, otherwise false.
      */
     public function addEventListener($event, $pluginId, $propertySetName = '') {
-        if (!$event || !is_string($propertySetName)) {
+        if (!$event) {
             return false;
         }
+        $propertySetName = is_scalar($propertySetName) && !empty($propertySetName) ? (string) $propertySetName : '';
         $listenerKey = (string) $pluginId;
         if (!is_numeric($pluginId)) {
-            $listener = $this->getDefinitionRegistry()->getListener($listenerKey);
+            $dispatcher = $this->getDefinitionEventDispatcher();
+            $listener = $dispatcher->getActiveListener($listenerKey);
             if (
                 !$listener
                 || !is_string($event)
                 || DefinitionRegistry::normalizeName($listener['event']) !== DefinitionRegistry::normalizeName($event)
-                || !$this->getDefinitionEventDispatcher()->supportsListenerPropertySet($listener, $propertySetName)
+                || !$dispatcher->supportsListenerPropertySet($listener, $propertySetName)
             ) {
                 return false;
             }
@@ -2461,7 +2469,7 @@ class modX extends xPDO {
         }
         $eventMapKey = $this->findNormalizedEventMapKey((string) $event) ?? $event;
         if (!isset($this->eventMap[$eventMapKey]) || empty($this->eventMap[$eventMapKey])) {
-            $this->eventMap[$eventMapKey]= [];
+            $this->eventMap[$eventMapKey] = [];
         }
         $this->eventMap[$eventMapKey][$listenerKey] = $listenerKey
             . ($propertySetName !== '' ? ':' . $propertySetName : '');
@@ -2471,7 +2479,9 @@ class modX extends xPDO {
 
     /**
      * Preserve the database event spelling already exposed by the compatibility
-     * map when a caller uses a case variant of that event name.
+     * map when a caller uses a case variant of a disk-declared event name.
+     * Events the registry does not know keep the legacy exact-key match, so a
+     * database-only site never dispatches a case variant that stock ignored.
      */
     private function findNormalizedEventMapKey(string $event): ?string
     {
@@ -2481,14 +2491,11 @@ class modX extends xPDO {
         if (array_key_exists($event, $this->eventMap)) {
             return $event;
         }
-        $normalized = DefinitionRegistry::normalizeName($event);
-        foreach (array_keys($this->eventMap) as $eventMapKey) {
-            if (is_string($eventMapKey) && DefinitionRegistry::normalizeName($eventMapKey) === $normalized) {
-                return $eventMapKey;
-            }
+        if (!$this->getDefinitionRegistry()->hasDiskEvent($event)) {
+            return null;
         }
 
-        return null;
+        return DefinitionRegistry::findNormalizedKey($this->eventMap, $event);
     }
 
     /**
@@ -2543,8 +2550,9 @@ class modX extends xPDO {
     /**
      * Gets a map of events and registered plugins for the specified context.
      *
-     * Filters stock database event services: manager contexts include 1, 2, 4, 5, and 6; web contexts
-     * include 1, 3, 4, 5, and 6.
+     * The service predicates stay exactly as stock so database-only sites keep the
+     * same dormant third-party bindings; disk event metadata is filtered separately
+     * by the definition event dispatcher.
      *
      * @param string $contextKey Context identifier.
      * @return array A map of events and registered plugins for each.
@@ -2555,11 +2563,11 @@ class modX extends xPDO {
             switch ($contextKey) {
                 case 'mgr':
                     /* dont load Web Access Service Events */
-                    $service= "Event.service IN (" . implode(',', EventDispatcher::MGR_EVENT_SERVICES) . ") AND";
+                    $service = "Event.service IN (" . implode(',', EventDispatcher::MGR_EVENT_SERVICES) . ") AND";
                     break;
                 default:
                     /* dont load Manager Access Events */
-                    $service= "Event.service IN (" . implode(',', EventDispatcher::WEB_EVENT_SERVICES) . ") AND";
+                    $service = "Event.service IN (" . implode(',', EventDispatcher::WEB_EVENT_SERVICES) . ") AND";
             }
             $pluginEventTbl= $this->getTableName(modPluginEvent::class);
             $eventTbl= $this->getTableName(modEvent::class);
@@ -2985,7 +2993,9 @@ class modX extends xPDO {
                     $this->eventMap= & $this->context->eventMap;
                     $this->pluginCache= & $this->context->pluginCache;
                     $this->config= array_merge($this->_systemConfig, $this->context->config);
-                    $this->getDefinitionEventDispatcher()->activateContext($contextKey, $this->eventMap);
+                    if (is_array($this->eventMap)) {
+                        $this->getDefinitionEventDispatcher()->activateContext($contextKey, $this->eventMap);
+                    }
                     $iniTZ = ini_get('date.timezone');
                     $cfgTZ = $this->getOption('date_timezone', $options, '');
                     if (!empty($cfgTZ)) {

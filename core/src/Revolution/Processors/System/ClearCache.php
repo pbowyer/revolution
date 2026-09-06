@@ -10,6 +10,7 @@
 
 namespace MODX\Revolution\Processors\System;
 
+use MODX\Revolution\Definition\DefinitionRegistry;
 use MODX\Revolution\modContext;
 use MODX\Revolution\Processors\Processor;
 use MODX\Revolution\modX;
@@ -151,7 +152,7 @@ class ClearCache extends Processor
             $partitions['scripts'] = [];
         }
 
-        $partitions['definition_registry'] = [];
+        $partitions[DefinitionRegistry::CACHE_PARTITION] = [];
 
         $partitions['default'] = [];
 

@@ -12,9 +12,8 @@ use Throwable;
 
 class DefinitionRegistryDeployment
 {
-    private const REGISTRY_CACHE_PARTITION = 'definition_registry';
     private const RESET_CACHE_PARTITIONS = [
-        self::REGISTRY_CACHE_PARTITION,
+        DefinitionRegistry::CACHE_PARTITION,
         'scripts',
         'default',
         'context_settings',
@@ -83,7 +82,7 @@ class DefinitionRegistryDeployment
         }
         $warmedHash = $this->modx->getCacheManager()->get(
             'release-hash',
-            $this->cachePartitionOptions(self::REGISTRY_CACHE_PARTITION)
+            $this->cachePartitionOptions(DefinitionRegistry::CACHE_PARTITION)
         );
         if (!is_string($warmedHash)) {
             $warmedHash = null;
@@ -288,22 +287,24 @@ class DefinitionRegistryDeployment
                 ) {
                     continue;
                 }
-                if ($element->loadScript() === false) {
-                    throw $this->failure(
-                        "Could not warm compiled script cache for {$definition['key']}",
-                        5,
-                        'script-cache-warm-failed'
-                    );
-                }
+                $this->warmScript($element, $definition['key']);
                 $warmedScripts++;
             }
+        }
+        $suppressed = $this->listenersSuppressedByDatabase($active['listeners']);
+        foreach ($active['listeners'] as $key => $listener) {
+            if (!empty($listener['service']) || isset($suppressed[$key])) {
+                continue;
+            }
+            $this->warmScript($dispatcher->resolvePlugin($listener), $listener['key']);
+            $warmedScripts++;
         }
         $releaseHash = $active['release_hash'];
         $hashStored = $cacheManager->set(
             'release-hash',
             $releaseHash,
             0,
-            $this->cachePartitionOptions(self::REGISTRY_CACHE_PARTITION)
+            $this->cachePartitionOptions(DefinitionRegistry::CACHE_PARTITION)
         );
         if (!$hashStored) {
             throw $this->failure('Could not record the warmed registry hash.', 5, 'registry-hash-cache-failed');
@@ -403,14 +404,7 @@ class DefinitionRegistryDeployment
                 ];
             }
         }
-        $databasePluginPresence = $this->databasePresence(
-            modPlugin::class,
-            array_column($catalog['listeners'], 'plugin')
-        );
-        foreach ($catalog['listeners'] as $listener) {
-            if (!($databasePluginPresence[DefinitionRegistry::normalizeName($listener['plugin'])] ?? false)) {
-                continue;
-            }
+        foreach ($this->listenersSuppressedByDatabase($catalog['listeners']) as $listener) {
             $diagnostics[] = [
                 'code' => 'database-plugin-collision',
                 'decision' => 'disk-suppressed-by-database',
@@ -437,9 +431,27 @@ class DefinitionRegistryDeployment
         return $diagnostics;
     }
 
+    private function warmScript(modScript $script, string $key): void
+    {
+        if ($script->loadScript() === false) {
+            throw $this->failure("Could not warm compiled script cache for {$key}", 5, 'script-cache-warm-failed');
+        }
+    }
+
     /**
-     * Return policy-free database presence for the supplied element names.
-     *
+     * @return array<string, array> The listeners whose plugin identity a database plugin reserves, keyed as given.
+     */
+    private function listenersSuppressedByDatabase(array $listeners): array
+    {
+        $presence = $this->databasePresence(modPlugin::class, array_column($listeners, 'plugin'));
+
+        return array_filter(
+            $listeners,
+            static fn(array $listener): bool => $presence[DefinitionRegistry::normalizeName($listener['plugin'])] ?? false
+        );
+    }
+
+    /**
      * Deployment validation must distinguish an operational query failure from an
      * absent database twin, so the collaborator's failure result becomes the
      * operational exit rather than an empty collision report.
@@ -602,10 +614,7 @@ class DefinitionRegistryDeployment
     }
 
     /**
-     * The public element type map, keyed by type, derived from the
-     * compiler-owned element type definitions.
-     *
-     * @return array<string, class-string>
+     * @return array<string, class-string> Public element types, keyed by type.
      */
     private static function elementTypes(): array
     {

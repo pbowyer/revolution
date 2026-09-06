@@ -10,6 +10,11 @@ class DefinitionRegistry
      * Domain-separation prefix for every release hash computed for this schema.
      */
     public const HASH_DOMAIN = "modx-disk-native-registry-v2\0";
+    /**
+     * The cache partition owning release identity, artifact attestations, and
+     * cached database facts; ordinary Clear Cache empties it.
+     */
+    public const CACHE_PARTITION = 'definition_registry';
 
     /**
      * The release hash of a compiled empty catalog. Pinned so bootstrapping a
@@ -20,6 +25,7 @@ class DefinitionRegistry
 
     private array $catalog;
     private array $listenersByEvent = [];
+    private ?array $normalizedEventNames = null;
     private ?array $allEventNames = null;
     private array $eventNamesByContext = [];
 
@@ -86,7 +92,6 @@ class DefinitionRegistry
                             'file',
                             'relative_file',
                             'content_hash',
-                            'content',
                             'normalized_name',
                         ],
                         'compiled definition'
@@ -94,6 +99,7 @@ class DefinitionRegistry
                     if (
                         $definition['source'] !== 'disk'
                         || $definition['normalized_name'] !== $name
+                        || !is_string($definition['content'] ?? null)
                         || !is_array($definition['properties'] ?? null)
                         || !is_array($definition['property_sets'] ?? null)
                         || ($definition['media_source'] ?? null) !== null
@@ -243,10 +249,24 @@ class DefinitionRegistry
 
     public static function findPropertySet(array $propertySets, string $setName): ?array
     {
-        $normalizedName = self::normalizeName($setName);
-        foreach ($propertySets as $declaredName => $properties) {
-            if (self::normalizeName((string) $declaredName) === $normalizedName) {
-                return $properties;
+        $declaredName = self::findNormalizedKey($propertySets, $setName);
+
+        return $declaredName === null ? null : $propertySets[$declaredName];
+    }
+
+    /**
+     * Find the key of $map that shares $wanted's case-insensitive identity,
+     * preferring an exact spelling so an existing public map key is reused.
+     */
+    public static function findNormalizedKey(array $map, string $wanted): ?string
+    {
+        if (array_key_exists($wanted, $map)) {
+            return $wanted;
+        }
+        $normalized = self::normalizeName($wanted);
+        foreach (array_keys($map) as $key) {
+            if (is_string($key) && self::normalizeName($key) === $normalized) {
+                return $key;
             }
         }
 
@@ -293,25 +313,11 @@ class DefinitionRegistry
         return $this->catalog['events'];
     }
 
-    public function getManifestPath(string $package): ?string
+    public function getManifestBasename(string $package): ?string
     {
         $path = $this->catalog['inventory'][$package]['manifest']['path'] ?? null;
 
         return is_string($path) ? $path : null;
-    }
-
-    public function getListeners(string $eventName, string $contextKey): array
-    {
-        $listeners = [];
-        foreach (($this->listenersByEvent[$eventName] ?? []) as $key) {
-            $listener = $this->catalog['listeners'][$key];
-            if ($listener['contexts'] && !in_array($contextKey, $listener['contexts'], true)) {
-                continue;
-            }
-            $listeners[$key] = $listener;
-        }
-
-        return $listeners;
     }
 
     public function getListener(string $key): ?array
@@ -353,11 +359,17 @@ class DefinitionRegistry
         return array_keys($events);
     }
 
+    /**
+     * Whether a declared event or a listener-only event shares this name under
+     * the registry's case-insensitive identity.
+     */
     public function hasDiskEvent(string $eventName): bool
     {
-        if (isset($this->catalog['events'][$eventName])) {
-            return true;
-        }
-        return isset($this->listenersByEvent[$eventName]);
+        $this->normalizedEventNames ??= array_fill_keys(
+            array_map(self::normalizeName(...), $this->getEventNames()),
+            true
+        );
+
+        return isset($this->normalizedEventNames[self::normalizeName($eventName)]);
     }
 }

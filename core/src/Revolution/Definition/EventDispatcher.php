@@ -15,7 +15,6 @@ class EventDispatcher
     public const WEB_EVENT_SERVICES = [1, 3, 4, 5, 6];
 
     private const DATABASE_FACTS_CACHE_KEY = 'event-plugin-facts';
-    private const DATABASE_FACTS_CACHE_PARTITION = 'definition_registry';
 
     private modX $modx;
     private DefinitionRegistry $registry;
@@ -51,10 +50,12 @@ class EventDispatcher
         if ($this->registry->isEmpty()) {
             return;
         }
-        foreach ($this->getDiskEventNames($contextKey) as $eventName) {
+        foreach ($this->getDiskEventNames() as $eventName) {
             if ($this->isRowlessDiskEvent($eventName)) {
                 $this->suppressRowlessDatabaseBindings($eventName, $eventMap);
             }
+        }
+        foreach ($this->getDiskEventNames($contextKey) as $eventName) {
             if (!$this->shouldActivateDiskEvent($eventName, $contextKey)) {
                 continue;
             }
@@ -71,10 +72,6 @@ class EventDispatcher
 
     public function deactivateContext(array &$eventMap): void
     {
-        $diskEvents = array_fill_keys(
-            array_map(DefinitionRegistry::normalizeName(...), $this->registry->getEventNames()),
-            true
-        );
         foreach ($eventMap as $eventName => &$legacyListeners) {
             if (!is_array($legacyListeners)) {
                 continue;
@@ -84,7 +81,7 @@ class EventDispatcher
                     unset($legacyListeners[$listenerKey]);
                 }
             }
-            if (!$legacyListeners && isset($diskEvents[DefinitionRegistry::normalizeName((string) $eventName)])) {
+            if (!$legacyListeners && $this->registry->hasDiskEvent((string) $eventName)) {
                 unset($eventMap[$eventName]);
             }
         }
@@ -101,7 +98,7 @@ class EventDispatcher
         foreach ($this->registry->getEvents() as $eventName => $declaration) {
             $event = $this->getDatabaseEvent($eventName);
             if ($event) {
-                $this->validateEventMetadataCollision($event, $declaration);
+                $this->validateEventMetadataCollision($event, $eventName, $declaration);
             }
         }
     }
@@ -118,7 +115,8 @@ class EventDispatcher
         $registryEmpty = $this->registry->isEmpty();
         $rowlessDiskEvent = !$registryEmpty && $this->isRowlessDiskEvent($eventName);
         foreach ($eventMap[$eventMapKey] as $listenerKey => $listenerValue) {
-            $disk = $registryEmpty ? null : $this->registry->getListener((string) $listenerKey);
+            $listenerKey = (string) $listenerKey;
+            $disk = $registryEmpty ? null : $this->getActiveListener($listenerKey);
             $matchesContext = $disk && (!$disk['contexts'] || in_array($contextKey, $disk['contexts'], true));
             if (
                 $disk
@@ -126,10 +124,7 @@ class EventDispatcher
                 && $matchesContext
             ) {
                 $descriptor = $disk;
-                $valuePrefix = (string) $listenerKey . ':';
-                if (is_string($listenerValue) && strncmp($listenerValue, $valuePrefix, strlen($valuePrefix)) === 0) {
-                    $descriptor['property_set'] = substr($listenerValue, strlen($valuePrefix));
-                }
+                $descriptor['property_set'] = self::propertySetFromBinding($listenerKey, $listenerValue);
                 $descriptors[] = $descriptor;
                 $containsDisk = true;
                 continue;
@@ -137,15 +132,11 @@ class EventDispatcher
             if (!is_numeric($listenerKey) || $rowlessDiskEvent) {
                 continue;
             }
-            $propertySet = '';
-            if (is_string($listenerValue) && ($position = strpos($listenerValue, ':')) !== false) {
-                $propertySet = substr($listenerValue, $position + 1);
-            }
             $descriptors[] = [
-                'key' => (string) $listenerKey,
+                'key' => $listenerKey,
                 'source' => 'database',
                 'plugin_id' => (int) $listenerKey,
-                'property_set' => $propertySet,
+                'property_set' => self::propertySetFromBinding($listenerKey, $listenerValue),
                 'priority' => 0,
             ];
         }
@@ -183,6 +174,31 @@ class EventDispatcher
         });
 
         return $descriptors;
+    }
+
+    /**
+     * The registry listener behind a public eventMap key, or null when the key is
+     * unknown or a database plugin reserves its identity. Activation, dispatch,
+     * and addEventListener() all resolve keys through here, so a direct eventMap
+     * write cannot re-project a listener that activation left out.
+     */
+    public function getActiveListener(string $key): ?array
+    {
+        $listener = $this->registry->getListener($key);
+
+        return $listener && !$this->isSuppressedByDatabasePlugin($listener) ? $listener : null;
+    }
+
+    /**
+     * The eventMap value is the binding: `<key>` or `<key>:<propertySet>`.
+     */
+    private static function propertySetFromBinding(string $key, mixed $value): string
+    {
+        $prefix = $key . ':';
+
+        return is_string($value) && strncmp($value, $prefix, strlen($prefix)) === 0
+            ? substr($value, strlen($prefix))
+            : '';
     }
 
     public function resolvePlugin(array $descriptor): ?modPlugin
@@ -241,7 +257,7 @@ class EventDispatcher
 
     private function getDiskPlugin(array $descriptor): modPlugin
     {
-        $definition = $this->registry->getDefinition(modPlugin::class, $descriptor['plugin']);
+        $definition = $this->listenerPluginDefinition($descriptor);
         $plugin = $this->modx->newObject(modPlugin::class);
         $plugin->set('name', $descriptor['plugin']);
         $plugin->setContent($descriptor['content'] ?? $definition['content'] ?? '');
@@ -251,9 +267,7 @@ class EventDispatcher
         $plugin->setDefinitionMetadata([
             'source' => 'disk',
             'package' => $descriptor['package'],
-            'manifest' => $definition['manifest']
-                ?? $descriptor['manifest']
-                ?? $this->registry->getManifestPath($descriptor['package']),
+            'manifest' => $definition['manifest'] ?? $descriptor['manifest'],
             'source_file' => $descriptor['file'] ?? ($definition['file'] ?? null),
             'normalized_key' => DefinitionRegistry::normalizeName($descriptor['plugin']),
             'definition_key' => $definition['key'] ?? $descriptor['key'],
@@ -326,11 +340,21 @@ class EventDispatcher
         if ($propertySet === '') {
             return true;
         }
+        $definition = $this->listenerPluginDefinition($listener);
+
+        return $definition !== null
+            && DefinitionRegistry::findPropertySet($definition['property_sets'] ?? [], $propertySet) !== null;
+    }
+
+    /**
+     * Only a same-package disk plugin definition lends a listener its defaults
+     * and property sets; the listener's plugin name is otherwise identity only.
+     */
+    private function listenerPluginDefinition(array $listener): ?array
+    {
         $definition = $this->registry->getDefinition(modPlugin::class, $listener['plugin']);
-        if (!$definition || $definition['package'] !== $listener['package']) {
-            return false;
-        }
-        return DefinitionRegistry::findPropertySet($definition['property_sets'] ?? [], $propertySet) !== null;
+
+        return $definition && $definition['package'] === $listener['package'] ? $definition : null;
     }
 
     private function activateEventListeners(
@@ -340,10 +364,11 @@ class EventDispatcher
         string $eventMapKey
     ): void {
         foreach ($this->getDiskListeners($eventName, $contextKey) as $key => $listener) {
-            if (!$this->isSuppressedByDatabasePlugin($listener)) {
-                $propertySet = $listener['property_set'] ?? '';
-                $eventMap[$eventMapKey][$key] = $key . ($propertySet !== '' ? ':' . $propertySet : '');
+            if ($this->getActiveListener($key) === null) {
+                continue;
             }
+            $propertySet = $listener['property_set'] ?? '';
+            $eventMap[$eventMapKey][$key] = $key . ($propertySet !== '' ? ':' . $propertySet : '');
         }
     }
 
@@ -353,7 +378,7 @@ class EventDispatcher
         $declaration = $this->getEventDeclaration($eventName);
         if ($event !== null) {
             if ($declaration) {
-                $this->validateEventMetadataCollision($event, $declaration);
+                $this->validateEventMetadataCollision($event, $eventName, $declaration);
             }
 
             return $this->databaseEventMatchesContext($event, $contextKey);
@@ -387,17 +412,7 @@ class EventDispatcher
 
     private function findEventMapKey(string $eventName, array $eventMap): ?string
     {
-        if (array_key_exists($eventName, $eventMap)) {
-            return $eventName;
-        }
-        $normalized = DefinitionRegistry::normalizeName($eventName);
-        foreach (array_keys($eventMap) as $mapKey) {
-            if (is_string($mapKey) && DefinitionRegistry::normalizeName($mapKey) === $normalized) {
-                return $mapKey;
-            }
-        }
-
-        return null;
+        return DefinitionRegistry::findNormalizedKey($eventMap, $eventName);
     }
 
     private function getDiskListeners(string $eventName, string $contextKey): array
@@ -425,31 +440,15 @@ class EventDispatcher
 
     private function getEventDeclaration(string $eventName): ?array
     {
-        $normalized = DefinitionRegistry::normalizeName($eventName);
-        foreach ($this->registry->getEvents() as $declaredName => $declaration) {
-            if (DefinitionRegistry::normalizeName((string) $declaredName) === $normalized) {
-                return $declaration;
-            }
-        }
+        $events = $this->registry->getEvents();
+        $declaredName = DefinitionRegistry::findNormalizedKey($events, $eventName);
 
-        return null;
-    }
-
-    private function hasDiskEvent(string $eventName): bool
-    {
-        $normalized = DefinitionRegistry::normalizeName($eventName);
-        foreach ($this->getDiskEventNames() as $diskEventName) {
-            if (DefinitionRegistry::normalizeName($diskEventName) === $normalized) {
-                return true;
-            }
-        }
-
-        return false;
+        return $declaredName === null ? null : $events[$declaredName];
     }
 
     public function isRowlessDiskEvent(string $eventName): bool
     {
-        return $this->hasDiskEvent($eventName)
+        return $this->registry->hasDiskEvent($eventName)
             && $this->getDatabaseEvent($eventName) === null;
     }
 
@@ -469,7 +468,7 @@ class EventDispatcher
     /**
      * @param array{name: string, service: mixed, groupname: string} $event
      */
-    private function validateEventMetadataCollision(array $event, array $declaration): void
+    private function validateEventMetadataCollision(array $event, string $declaredName, array $declaration): void
     {
         $disk = $declaration['metadata'];
         $database = [
@@ -480,14 +479,15 @@ class EventDispatcher
             if (!array_key_exists($field, $disk) || $disk[$field] === $database[$field]) {
                 continue;
             }
-            $key = $event['name'] . ':' . $field;
+            $key = DefinitionRegistry::normalizeName($declaredName) . ':' . $field;
             $diagnostic = [
                 'code' => 'event-metadata-conflict',
-                'event' => $event['name'],
+                'event' => $declaredName,
                 'package' => $declaration['package'],
                 'field' => $field,
                 'database' => $database[$field],
                 'disk' => $disk[$field],
+                'message' => "The database event's {$field} takes precedence over the disk declaration.",
             ];
             if (!isset($this->diagnostics[$key])) {
                 $this->diagnostics[$key] = $diagnostic;
@@ -566,8 +566,8 @@ class EventDispatcher
      */
     private function getDatabaseEvent(string $eventName): ?array
     {
-        if (!array_key_exists($eventName, $this->databaseEventCache)) {
-            $eventKey = DefinitionRegistry::normalizeName($eventName);
+        $eventKey = DefinitionRegistry::normalizeName($eventName);
+        if (!array_key_exists($eventKey, $this->databaseEventCache)) {
             $facts = $this->loadPersistentDatabaseFacts();
             $snapshot = array_key_exists($eventKey, $facts['events'])
                 ? $facts['events'][$eventKey]
@@ -577,20 +577,21 @@ class EventDispatcher
                     'Database definition facts unavailable; refusing to activate disk event listeners.'
                 );
             }
-            $this->databaseEventCache[$eventName] = $snapshot === false ? null : $snapshot;
+            $this->databaseEventCache[$eventKey] = $snapshot === false ? null : $snapshot;
         }
 
-        return $this->databaseEventCache[$eventName];
+        return $this->databaseEventCache[$eventKey];
     }
 
     private function getDatabasePriorities(string $eventName): array
     {
-        if (isset($this->priorityCache[$eventName])) {
-            return $this->priorityCache[$eventName];
+        $eventKey = DefinitionRegistry::normalizeName($eventName);
+        if (isset($this->priorityCache[$eventKey])) {
+            return $this->priorityCache[$eventKey];
         }
         $facts = $this->loadPersistentDatabaseFacts();
-        if (array_key_exists($eventName, $facts['priorities'])) {
-            return $this->priorityCache[$eventName] = $facts['priorities'][$eventName];
+        if (array_key_exists($eventKey, $facts['priorities'])) {
+            return $this->priorityCache[$eventKey] = $facts['priorities'][$eventKey];
         }
 
         $priorities = $this->databaseFacts->eventPrioritiesForEvent($eventName);
@@ -600,7 +601,7 @@ class EventDispatcher
             );
         }
 
-        return $this->priorityCache[$eventName] = $priorities;
+        return $this->priorityCache[$eventKey] = $priorities;
     }
 
     /**
@@ -669,9 +670,10 @@ class EventDispatcher
         }
         $priorities = $this->databaseFacts->eventPriorities($eventNames);
         foreach ($eventNames as $eventName) {
-            $facts['priorities'][$eventName] = $this->resolveFact(
+            $eventKey = DefinitionRegistry::normalizeName($eventName);
+            $facts['priorities'][$eventKey] = $this->resolveFact(
                 $priorities,
-                DefinitionRegistry::normalizeName($eventName),
+                $eventKey,
                 fn() => $this->databaseFacts->eventPrioritiesForEvent($eventName),
                 []
             );
@@ -791,6 +793,6 @@ class EventDispatcher
 
     private function databaseFactsCacheOptions(): array
     {
-        return $this->modx->getCacheManager()->getPartitionOptions(self::DATABASE_FACTS_CACHE_PARTITION);
+        return $this->modx->getCacheManager()->getPartitionOptions(DefinitionRegistry::CACHE_PARTITION);
     }
 }

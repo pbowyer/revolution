@@ -20,8 +20,6 @@ class modTemplateVarResource extends \MODX\Revolution\modTemplateVarResource
             'tmplvarid' => 0,
             'contentid' => 0,
             'value' => NULL,
-            'createdon' => 0,
-            'editedon' => 0,
         ),
         'fieldMeta' => 
         array (
@@ -50,22 +48,6 @@ class modTemplateVarResource extends \MODX\Revolution\modTemplateVarResource
                 'dbtype' => 'mediumtext',
                 'phptype' => 'string',
                 'null' => false,
-            ),
-            'createdon' =>
-            array (
-                'dbtype' => 'int',
-                'precision' => '20',
-                'phptype' => 'timestamp',
-                'null' => false,
-                'default' => 0,
-            ),
-            'editedon' =>
-            array (
-                'dbtype' => 'int',
-                'precision' => '20',
-                'phptype' => 'timestamp',
-                'null' => false,
-                'default' => 0,
             ),
         ),
         'indexes' => 

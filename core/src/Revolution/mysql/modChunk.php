@@ -105,7 +105,7 @@ class modChunk extends \MODX\Revolution\modChunk
                 'default' => 0,
                 'index' => 'index',
             ),
-            'static_file' =>
+            'static_file' => 
             array (
                 'dbtype' => 'varchar',
                 'precision' => '255',
@@ -113,7 +113,7 @@ class modChunk extends \MODX\Revolution\modChunk
                 'null' => false,
                 'default' => '',
             ),
-            'createdon' =>
+            'createdon' => 
             array (
                 'dbtype' => 'int',
                 'precision' => '20',
@@ -121,7 +121,7 @@ class modChunk extends \MODX\Revolution\modChunk
                 'null' => false,
                 'default' => 0,
             ),
-            'editedon' =>
+            'editedon' => 
             array (
                 'dbtype' => 'int',
                 'precision' => '20',

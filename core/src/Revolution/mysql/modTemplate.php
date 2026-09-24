@@ -123,7 +123,7 @@ class modTemplate extends \MODX\Revolution\modTemplate
                 'null' => false,
                 'default' => '',
             ),
-            'preview_file' =>
+            'preview_file' => 
             array (
                 'dbtype' => 'varchar',
                 'precision' => '191',
@@ -131,7 +131,7 @@ class modTemplate extends \MODX\Revolution\modTemplate
                 'null' => false,
                 'default' => '',
             ),
-            'createdon' =>
+            'createdon' => 
             array (
                 'dbtype' => 'int',
                 'precision' => '20',
@@ -139,7 +139,7 @@ class modTemplate extends \MODX\Revolution\modTemplate
                 'null' => false,
                 'default' => 0,
             ),
-            'editedon' =>
+            'editedon' => 
             array (
                 'dbtype' => 'int',
                 'precision' => '20',

@@ -43,7 +43,7 @@ class modTemplateVarResource extends \MODX\Revolution\modTemplateVarResource
                 'default' => 0,
                 'index' => 'index',
             ),
-            'value' =>
+            'value' => 
             array (
                 'dbtype' => 'mediumtext',
                 'phptype' => 'string',

@@ -51,7 +51,7 @@ class modPluginEvent extends \MODX\Revolution\modPluginEvent
                 'default' => 0,
                 'index' => 'index',
             ),
-            'propertyset' =>
+            'propertyset' => 
             array (
                 'dbtype' => 'int',
                 'precision' => '10',

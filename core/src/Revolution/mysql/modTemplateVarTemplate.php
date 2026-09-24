@@ -43,7 +43,7 @@ class modTemplateVarTemplate extends \MODX\Revolution\modTemplateVarTemplate
                 'default' => 0,
                 'index' => 'pk',
             ),
-            'rank' =>
+            'rank' => 
             array (
                 'dbtype' => 'int',
                 'precision' => '11',

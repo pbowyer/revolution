@@ -31,7 +31,7 @@ class modTemplateVarResourceGroup extends \MODX\Revolution\modTemplateVarResourc
                 'null' => false,
                 'default' => 0,
             ),
-            'documentgroup' =>
+            'documentgroup' => 
             array (
                 'dbtype' => 'int',
                 'precision' => '10',

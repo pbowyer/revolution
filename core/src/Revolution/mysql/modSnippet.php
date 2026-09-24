@@ -77,7 +77,7 @@ class modSnippet extends \MODX\Revolution\modSnippet
                 'default' => 0,
                 'index' => 'index',
             ),
-            'static_file' =>
+            'static_file' => 
             array (
                 'dbtype' => 'varchar',
                 'precision' => '255',
@@ -85,7 +85,7 @@ class modSnippet extends \MODX\Revolution\modSnippet
                 'null' => false,
                 'default' => '',
             ),
-            'createdon' =>
+            'createdon' => 
             array (
                 'dbtype' => 'int',
                 'precision' => '20',
@@ -93,7 +93,7 @@ class modSnippet extends \MODX\Revolution\modSnippet
                 'null' => false,
                 'default' => 0,
             ),
-            'editedon' =>
+            'editedon' => 
             array (
                 'dbtype' => 'int',
                 'precision' => '20',
@@ -102,7 +102,7 @@ class modSnippet extends \MODX\Revolution\modSnippet
                 'default' => 0,
             ),
         ),
-        'fieldAliases' =>
+        'fieldAliases' => 
         array (
             'content' => 'snippet',
         ),
